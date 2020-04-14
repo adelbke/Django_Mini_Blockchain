@@ -31,7 +31,14 @@ def concensus(request):
 	if request.method == 'GET':
 		return HttpResponseForbidden
 	chain = json.loads(request.body.decode('utf-8'))
-	return HttpResponse(json.dumps(BlockChain.check_chain(chain)))
+
+	outcome = BlockChain.consensus_outcome[BlockChain.consensus(chain)]
+
+	output = {
+		'Result':outcome,
+		'Chain':BlockChain.get_blocks()
+	}
+	return HttpResponse(json.dumps(output))
 
 class BlockChain:
 
@@ -65,14 +72,14 @@ class BlockChain:
 			else:
 				previous_block = Block.objects.all().get_by_hash(current.previous)
 				if current.previous != previous_block.hash_block():
-					raise Exception('Blockchain is faulty')
+					return False
 				else:
 					if current.proof_of_work % 9 == 0 and current.proof_of_work % previous_block.proof_of_work == 0:
 						# if the proof of work is correct we move on
 						current = Block.objects.all().get_by_hash(current.previous)
 					else:
 						# otherwise we throw a an error
-						raise Exception('Faulty Blockchain')
+						return False
 
 
 	@staticmethod
@@ -114,45 +121,125 @@ class BlockChain:
 	@staticmethod
 	def check_chain(chain):
 		last_block =  BlockChain.__get_last_block(chain)
-		i = 0
 		current = last_block
-		while i < len(chain):
-			if current.get('hash') != hash(current['fields']['timestamp'],
-									   current['fields']['data'],
-									   current['previous']):
-	# 			faulty chain
+		condition = True
+		i = 1
+		while condition:
+	# 		we verify if this block is the genesis block
+	# 		this means two things, either the data has been compromised and the genesis block is the last block
+	# 		Or it's an empty chain with one block
+			if BlockChain.__check_if_genesis(current):
+				if i == len(chain):
+	# 				chain valid
+					return True
+				else:
+					# invalid chain
+					return False
+
+	# 		we continue by acquiring the previous block, this block has been found with the exposed value
+			try:
+				previous_block = BlockChain.__get_block_with_hash(current['previous'],chain)
+			except:
 				return False
-			else:
-				current = BlockChain.__get_block_with_hash(current['previous'], chain)
+	# 		if the block is available we verify the proof of work
+			if int(current['proof_of_work']) % 9 == 0 and int(current['proof_of_work']) % int(previous_block['proof_of_work']) == 0:
+			# 	if the proof of work is valid we go forward in the Blockchain
+				current = previous_block
 				i += 1
-		return True
+			else:
+				return False
 
 	@staticmethod
 	def __get_last_block(external_chain):
 		biggest = external_chain[0]
 		for block in external_chain:
-			if block['fields']['timestamp'] > biggest['fields']['timestamp']:
+			if block['timestamp'] > biggest['timestamp']:
 				biggest = block
 
 		return biggest
 
 	@staticmethod
-	def __get_block_with_hash(value,chain):
-		for block in chain:
-			if hash(block['fields']['timestamp'],block['fields']['data'],block['previous']) == value:
-				return block
-		return None
+	def __check_if_genesis(external_block):
+		data_dictionary = {
+			'Content': 'This is the Genesis Block data'
+		}
+		if external_block['previous'] == "0" and external_block['data'] == data_dictionary:
+			return True
+		else:
+			return False
 
 	@staticmethod
-	def concensus(external_chain):
+	def __get_block_with_hash(value,chain):
+		block_by_value = None
+		block_by_hash = None
+		for block in chain:
+			# we save the block found by the value
+			if block['hash'] == value:
+				block_by_value = block
+			# we save the block found by the hash
+			if hash(block['timestamp'],block['data'],block['previous']) == value:
+				block_by_hash = block
+			# if we saved both, we exit the loop
+			if block_by_value is not None and block_by_hash is not None:
+				break;
+
+		# we verify if there's integrity
+		if block_by_value == block_by_hash:
+			return block_by_value
+		else:
+			raise Exception('Blockhain faulty!')
+
+	consensus_outcome = {
+		0:'external chain Faulty and Rejected',
+		1: 'internal chain faulty and accepted external Chain',
+		2: 'external chain longer and accepted',
+		3: 'internal chain longer'
+	}
+	@staticmethod
+	def consensus(external_chain):
 		# chain should be a list containing dictionaries
-		chain = Block.objects.all().order_by('timestamp').values()
+		chain = Block.objects.all().list_dict()
 
-		# we first verify the length of each chain
-		if chain.count() > len(external_chain):
-			# our chain is longer
-
-			for block in chain:
-				pass
-
-		pass
+		# we return a code
+		# 0 external chain Faulty and Rejected
+		# 1 internal chain faulty and accepted external Chain
+		# 2 external chain longer and accepted
+		# 3 internal chain longer
+		# we first check if any of the chains is faulty
+		if not BlockChain.check():
+		# 	our chain is faulty so we accept the external node's chain
+		# 	we delete our chain
+			Block.objects.all().delete()
+		# 	we add the external items
+			previous = "0"
+			for block in external_chain:
+				item = Block(timestamp=block['timestamp'],
+							 data=block['data'],
+							 proof_of_work=block['proof_of_work'],
+							 previous=previous)
+				item.save()
+				previous = block['hash']
+			return 1
+		else:
+			# if the external chain is invalid we don't take it into consideration
+			if not BlockChain.check_chain(external_chain):
+				return 0
+			else:
+# 				any of the chains is faulty,
+# 				we take the longest one
+				if len(chain) > len(external_chain):
+# 					we change nothing the internal chain is the longest
+					return 3
+				else:
+					# 	we delete our chain
+					Block.objects.all().delete()
+					# 	we add the external items
+					previous = "0"
+					for block in external_chain:
+						item = Block(timestamp=block['timestamp'],
+									 data=block['data'],
+									 proof_of_work=block['proof_of_work'],
+									 previous=previous)
+						item.save()
+						previous = block['hash']
+					return 2
