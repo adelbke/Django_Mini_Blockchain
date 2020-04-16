@@ -32,13 +32,11 @@ def concensus(request):
 		return HttpResponseForbidden
 	chain = json.loads(request.body.decode('utf-8'))
 
-	outcome = BlockChain.consensus_outcome[BlockChain.consensus(chain)]
+	original_chain = BlockChain.get_blocks()
 
-	output = {
-		'Result':outcome,
-		'Chain':BlockChain.get_blocks()
-	}
-	return HttpResponse(json.dumps(output))
+	BlockChain.consensus(chain)
+
+	return HttpResponse(json.dumps(original_chain))
 
 class BlockChain:
 
